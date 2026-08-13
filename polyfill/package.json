@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "temporal-polyfill",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "title": "Temporal Polyfill",
   "description": "A lightweight polyfill for Temporal, successor to the JavaScript Date object",
   "author": {
@@ -123,7 +123,7 @@
   },
   "dependencies": {
     "temporal-spec": "workspace:1.0.1",
-    "temporal-utils": "workspace:1.0.1"
+    "temporal-utils": "workspace:1.0.2"
   },
   "devDependencies": {
     "@biomejs/biome": "1.5.1",
