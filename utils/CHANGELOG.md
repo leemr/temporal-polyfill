@@ -1,6 +1,10 @@
 
 # `temporal-utils` Changelog
 
+## v1.0.2
+
+- FIX: Compatibility with CJS and `require(esm)` (#101), thx @connor-baer
+
 ## v1.0.1
 
 - FEATURE: Initial release. [See docs](./README.md) or [how it ties into other packages](../README.md).

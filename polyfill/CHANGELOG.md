@@ -8,6 +8,11 @@ don't work in GH release markdown. must be absolute
 
 # `temporal-polyfill` Changelog
 
+## v1.0.4
+
+- FIX: `/full` entrypoint not deferring to native Temporal (#102), thx @leemr
+- FIX: Tree-shakeable API not CJS-friendly (`require(esm)`), via `temporal-utils` (#101), thx @connor-baer
+
 ## v1.0.3
 
 - FIX: Regression with `package.json#exports` where require(esm) from cjs would not work in v1 (#99, #62)
