@@ -1,10 +1,3 @@
-<!--
-  Links here are NOT rewritten on publish. Any link to another file in this repo
-  must be an absolute GitHub URL rooted at:
-    https://github.com/fullcalendar/temporal-polyfill/blob/main/
-  (use /tree/main/ instead of /blob/main/ when linking a directory)
--->
-
 # temporal-polyfill-codemod
 
 Automated migrations for `temporal-polyfill` codebases.

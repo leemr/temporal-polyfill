@@ -1,10 +1,3 @@
-<!--
-  Links here are NOT rewritten on publish. Any link to another file in this repo
-  must be an absolute GitHub URL rooted at:
-    https://github.com/fullcalendar/temporal-polyfill/blob/main/
-  (use /tree/main/ instead of /blob/main/ when linking a directory)
--->
-
 # temporal-spec
 
 TypeScript type definitions for [Temporal](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal), the successor to the JavaScript `Date` object.
