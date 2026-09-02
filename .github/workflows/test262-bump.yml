@@ -1,0 +1,216 @@
+name: Test262 Bump
+
+# Bumps the test262 submodule, runs the Temporal suite against it, and opens a
+# PR carrying the failure report.
+#
+# The job runs weekly and stays silent on most weeks. A gate decides whether the
+# new test262 commits can change our result at all. Only then does it clone the
+# 239 MB submodule, build, and open a PR. The point of the gate is not runner
+# minutes, which are free on a public repo. It is to keep a PR out of the
+# maintainer's inbox on a week where nothing we test actually moved.
+
+on:
+  schedule:
+    # Weekly, Monday morning UTC. Change to '17 6 * * *' for daily; the gate
+    # keeps a no-op run quiet either way.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Open a PR even when no Temporal-relevant tests changed'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  TZ: 'America/New_York'
+  PR_BRANCH: ci/test262-bump
+  TEST262_REPO: https://github.com/tc39/test262.git
+
+jobs:
+  bump:
+    name: Bump test262 and report
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        # Deliberately no submodules here. The gate below runs without them.
+
+      - name: Resolve pinned and latest test262 commits
+        id: sha
+        run: |
+          old=$(git ls-tree HEAD test262 | awk '{ print $3 }')
+          new=$(git ls-remote "$TEST262_REPO" refs/heads/main | cut -f1)
+          echo "old=$old" >> "$GITHUB_OUTPUT"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          echo "Pinned: $old"
+          echo "Latest: $new"
+
+      # The gate.
+      #
+      # A blobless clone carries every tree but no file contents, which is all
+      # `git diff --name-only` needs. It is ~30 MB and ~12 s, against 239 MB for
+      # a full test262 checkout. That is cheap enough to run before deciding
+      # anything, which is what lets the job stay silent instead of opening an
+      # empty PR.
+      #
+      # The paths below are the runner's real test surface, taken from
+      # @js-temporal/temporal-test262-runner. When testGlobs is empty it globs:
+      #   test/**/Temporal/**/*.js
+      #   test/intl402/DateTimeFormat/**/*.js
+      #   test/built-ins/Date/p*/toTemporalInstant/*.js
+      # It also reads helpers out of harness/ for each test's `includes`.
+      #
+      # Nothing outside those paths can change our result, so a bump touching
+      # only them is not worth a PR.
+      - name: Decide whether the bump can change our result
+        id: gate
+        if: steps.sha.outputs.old != steps.sha.outputs.new
+        run: |
+          git clone --filter=blob:none --no-checkout --quiet \
+            "$TEST262_REPO" /tmp/test262-gate
+          cd /tmp/test262-gate
+          git diff --name-only \
+            "${{ steps.sha.outputs.old }}" "${{ steps.sha.outputs.new }}" \
+            > /tmp/changed-all.txt
+          grep -E '^(harness/|test/.*/Temporal/|test/intl402/DateTimeFormat/|test/built-ins/Date/p[^/]*/toTemporalInstant/)' \
+            /tmp/changed-all.txt > /tmp/changed-surface.txt || true
+          all=$(wc -l < /tmp/changed-all.txt | tr -d '[:space:]')
+          surface=$(wc -l < /tmp/changed-surface.txt | tr -d '[:space:]')
+          echo "changed_all=$all" >> "$GITHUB_OUTPUT"
+          echo "changed_surface=$surface" >> "$GITHUB_OUTPUT"
+          echo "$all file(s) changed upstream, $surface of them in our test surface"
+          if [ "$surface" -gt 0 ] || [ "${{ inputs.force }}" = "true" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing in our test surface moved. Leaving the pin alone."
+          fi
+
+      - name: Check out submodules
+        if: steps.gate.outputs.relevant == 'true'
+        run: git submodule update --init --recursive
+
+      - name: Bump the test262 submodule
+        if: steps.gate.outputs.relevant == 'true'
+        run: |
+          cd test262
+          git fetch --quiet origin main
+          git checkout --quiet "${{ steps.sha.outputs.new }}"
+
+      - name: Setup PNPM
+        if: steps.gate.outputs.relevant == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
+
+      - name: Setup Node
+        if: steps.gate.outputs.relevant == 'true'
+        uses: actions/setup-node@v3
+        with:
+          # NOTE: keep synced with .npmrc
+          node-version: 22.14.0
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        if: steps.gate.outputs.relevant == 'true'
+        run: pnpm install
+
+      - name: Build
+        if: steps.gate.outputs.relevant == 'true'
+        run: pnpm run build
+
+      # --no-max so the report lists every failure. CI keeps the default of 10,
+      # which aborts early; a report wants the whole picture.
+      # The step must not fail the job, or the PR never gets opened.
+      - name: Test 262 Full
+        if: steps.gate.outputs.relevant == 'true'
+        id: test262
+        run: |
+          set -o pipefail
+          status=0
+          # Run from polyfill/ so --no-max reaches the runner. `pnpm -r run`
+          # at the root does not forward the flag.
+          cd polyfill
+          TEST262_CLASS_API=full pnpm run test262 --no-max \
+            2>&1 | tee /tmp/test262.log || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          # The runner prints progress lines, then a summary. Keep the summary.
+          sed -n '/Summary of results/,$p' /tmp/test262.log > /tmp/test262-summary.log
+          # No summary means the runner died before finishing. Show the tail so
+          # the PR body still says something useful.
+          if [ ! -s /tmp/test262-summary.log ]; then
+            echo 'The runner produced no summary. Last 50 lines:' \
+              > /tmp/test262-summary.log
+            tail -50 /tmp/test262.log >> /tmp/test262-summary.log
+          fi
+          exit 0
+
+      - name: Upload the full log
+        if: steps.gate.outputs.relevant == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test262-log
+          path: /tmp/test262.log
+
+      - name: Open or update the PR
+        if: steps.gate.outputs.relevant == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD: ${{ steps.sha.outputs.old }}
+          NEW: ${{ steps.sha.outputs.new }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -B "$PR_BRANCH"
+          git add test262
+          # Matches the repo's own style, eg. the existing "update test262".
+          git commit -m "update test262 to ${NEW:0:10}"
+          git push --force origin "$PR_BRANCH"
+
+          if [ "${{ steps.test262.outputs.status }}" = "0" ]; then
+            verdict='The suite passes against the new tests. No expected-failure changes are needed.'
+          else
+            verdict='**The suite fails against the new tests.** Each failure below needs a decision: fix it, or add it to an expected-failure list. See `polyfill/scripts/test262-expected-failures/`, where each file opens with its category (`WONTFIX`, `ENV-ISSUE`, `BUILTIN-USAGE`).'
+          fi
+
+          {
+            echo "Bumps the \`test262\` submodule and reports the result."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Previous | \`$OLD\` |"
+            echo "| New | \`$NEW\` |"
+            echo "| Files changed upstream | ${{ steps.gate.outputs.changed_all }} |"
+            echo "| ...within our test surface | ${{ steps.gate.outputs.changed_surface }} |"
+            echo
+            echo "[Compare on tc39/test262](https://github.com/tc39/test262/compare/$OLD...$NEW)"
+            echo
+            echo "$verdict"
+            echo
+            echo '> Note: the runner exits 0 even when tests pass unexpectedly.'
+            echo '> Read the `passed unexpectedly` count below, not just the exit status.'
+            echo
+            echo '## Test 262 Full, Node 22.14.0'
+            echo
+            echo '```'
+            head -c 50000 /tmp/test262-summary.log
+            echo
+            echo '```'
+            echo
+            echo 'The full log is attached to this run as the `test262-log` artifact.'
+          } > /tmp/pr-body.md
+
+          existing=$(gh pr list --head "$PR_BRANCH" --state open \
+            --json number --jq '.[0].number')
+          title="update test262 to ${NEW:0:10}"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body-file /tmp/pr-body.md
+          else
+            gh pr create --base main --head "$PR_BRANCH" \
+              --title "$title" --body-file /tmp/pr-body.md
+          fi
